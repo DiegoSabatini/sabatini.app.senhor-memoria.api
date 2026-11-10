@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: senhor-memoria-db
+    environment:
+      POSTGRES_USER: senhor
+      POSTGRES_PASSWORD: memoria
+      POSTGRES_DB: senhor_memoria
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

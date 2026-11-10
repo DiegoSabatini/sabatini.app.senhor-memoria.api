@@ -1,0 +1,176 @@
+// Senhor Memória — modelo de dados
+// Fase 1: contas, perfis de saúde, cuidadores, cartão de emergência e remédios.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Conta de acesso ao app (quem faz login).
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String
+  phone        String?
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships     ProfileMember[]
+  devices         Device[]
+  patientProfiles Profile[]       @relation("ProfilePatient")
+}
+
+/// Celular do usuário, para notificações push (Expo).
+model Device {
+  id        String   @id @default(uuid())
+  userId    String
+  pushToken String   @unique
+  platform  String? // android | ios
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+enum ProfileRole {
+  /// Quem criou e administra o perfil (a própria pessoa ou o filho que cuida da mãe).
+  OWNER
+  /// Familiar convidado para acompanhar.
+  CAREGIVER
+}
+
+/// Perfil de saúde de uma pessoa. Uma conta pode administrar vários perfis (plano Família).
+model Profile {
+  id            String    @id @default(uuid())
+  name          String
+  birthDate     DateTime? @db.Date
+  /// Fuso usado para os horários dos remédios.
+  timezone      String    @default("America/Sao_Paulo")
+  /// Conta da própria pessoa, se ela usa o app. Recebe os lembretes.
+  patientUserId String?
+
+  // Cartão de emergência
+  bloodType       String?
+  allergies       String[] @default([])
+  conditions      String[] @default([])
+  emergencyNotes  String?
+  /// Se true, o cartão pode ser aberto pelo link/QR code público.
+  emergencyPublic Boolean  @default(false)
+  emergencyToken  String   @unique @default(uuid())
+
+  // Escalonamento de doses não confirmadas (minutos após o horário)
+  reminderRetryMinutes  Int @default(30)
+  caregiverAlertMinutes Int @default(60)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  patientUser       User?              @relation("ProfilePatient", fields: [patientUserId], references: [id], onDelete: SetNull)
+  members           ProfileMember[]
+  emergencyContacts EmergencyContact[]
+  medications       Medication[]
+  doses             DoseEvent[]
+}
+
+/// Quem tem acesso a um perfil e com qual papel.
+model ProfileMember {
+  id                String      @id @default(uuid())
+  profileId         String
+  userId            String
+  role              ProfileRole
+  /// Receber aviso quando uma dose não for confirmada.
+  notifyMissedDoses Boolean     @default(true)
+  createdAt         DateTime    @default(now())
+
+  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, userId])
+  @@index([userId])
+}
+
+model EmergencyContact {
+  id           String  @id @default(uuid())
+  profileId    String
+  name         String
+  phone        String
+  relationship String?
+
+  profile Profile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+}
+
+model Medication {
+  id            String    @id @default(uuid())
+  profileId     String
+  name          String
+  /// Ex.: "50 mg", "1 comprimido", "10 gotas"
+  dosage        String
+  instructions  String?
+  startDate     DateTime  @db.Date
+  endDate       DateTime? @db.Date
+  active        Boolean   @default(true)
+  /// Quantas unidades restam na caixa (opcional, para avisar quando estiver acabando).
+  stockQuantity Int?
+  unitsPerDose  Int       @default(1)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  profile   Profile              @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  schedules MedicationSchedule[]
+  doses     DoseEvent[]
+
+  @@index([profileId])
+}
+
+/// Horário de um remédio. Ex.: 08:00 todos os dias, ou 20:00 seg/qua/sex.
+model MedicationSchedule {
+  id           String @id @default(uuid())
+  medicationId String
+  /// "HH:mm" no fuso do perfil
+  time         String
+  /// 1 = segunda ... 7 = domingo. Vazio = todos os dias.
+  daysOfWeek   Int[]  @default([])
+
+  medication Medication  @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+  doses      DoseEvent[]
+
+  @@index([medicationId])
+}
+
+enum DoseStatus {
+  PENDING
+  TAKEN
+  SKIPPED
+  MISSED
+}
+
+/// Cada dose prevista. É o que gera lembretes, alertas e o histórico de adesão.
+model DoseEvent {
+  id                 String     @id @default(uuid())
+  profileId          String
+  medicationId       String
+  scheduleId         String?
+  scheduledAt        DateTime
+  status             DoseStatus @default(PENDING)
+  remindersSent      Int        @default(0)
+  lastReminderAt     DateTime?
+  caregiverAlertedAt DateTime?
+  confirmedAt        DateTime?
+  confirmedById      String?
+  note               String?
+  createdAt          DateTime   @default(now())
+
+  profile    Profile             @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  medication Medication          @relation(fields: [medicationId], references: [id], onDelete: Cascade)
+  schedule   MedicationSchedule? @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+
+  @@unique([scheduleId, scheduledAt])
+  @@index([status, scheduledAt])
+  @@index([profileId, scheduledAt])
+}
